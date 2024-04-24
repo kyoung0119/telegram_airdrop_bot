@@ -37,6 +37,19 @@ BALANCE_TEXT = """
 __📅 Withdrawals to your Sol wallet will be available starting 10/5.__
 """
 
+WITHDRAW_TEXT = """
+**💸 Availalbe Withdraw Balance: {}**
+
+Please provide a wallet address to receive your withdrawal.
+"""
+
+WITHDRAW_TEXT_EMPTY = """
+**💸 Availalbe Withdraw Balance: {}**
+
+There are no available balance to withdraw.
+"""
+
+
 NEW_REFERRED = """
 **Congratulations** 🎉 
 

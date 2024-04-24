@@ -1,4 +1,5 @@
-
+config.py
+config_origin.py
 *.session
 *.session-journal
 /__pycache__
