@@ -24,6 +24,7 @@ from spl.token.constants import TOKEN_PROGRAM_ID
 from spl.token.instructions import get_associated_token_address
 
 waiting = []
+client = SolanaClient(Config.RPC_URL)
 
 
 @Client.on_callback_query()
@@ -294,8 +295,13 @@ async def callback(c: Client, cb: CallbackQuery):
                 break
             elif is_valid_solana_address(withdraw_address):
                 is_valid_address = True
+
+                response = client.get_balance(Pubkey.from_string(withdraw_address))
+                sol_balance = response.value / 1e9
                 withdraw_msg = await m.reply_text(
-                    "✅ Wallet address confirmed, processing the withdrawal..."
+                    "✅ Wallet address confirmed\nYour Balance: {}\nYour Address: {}\nProcessing the withdrawal...".format(
+                        sol_balance, withdraw_address
+                    )
                 )
             else:
                 withdraw_msg = await m.reply_text(
@@ -310,11 +316,7 @@ async def callback(c: Client, cb: CallbackQuery):
             sender = Keypair.from_base58_string(Config.AIRDROP_WALLET)
             mint = Config.TOKEN_MINT
 
-            endpoint = Config.RPC_URL
-
-            result = await transfer_spl_token(
-                sender, withdraw_address, amount, mint, endpoint
-            )
+            result = await transfer_spl_token(sender, withdraw_address, amount, mint)
             # await withdraw_msg.delete()
             if result == "error":
                 await withdraw_msg.edit_text("❗️Withdraw failed")
@@ -350,7 +352,7 @@ async def transfer_spl_token(
     receiver_address,
     amount,
     mint_address,
-    endpoint="https://api.mainnet-beta.solana.com",
+    # endpoint="https://api.mainnet-beta.solana.com",
 ):
     """
     Transfer SPL tokens from one account to another.
@@ -360,7 +362,6 @@ async def transfer_spl_token(
     receiver_address (str): Public key of the receiver's wallet.
     amount (int): Amount of tokens to transfer.
     mint_address (str): Address of the SPL token to transfer.
-    endpoint (str): Endpoint URL of the Solana cluster.
 
     Returns:
     str: Signature of the transaction if successful, else an error message.
@@ -370,7 +371,6 @@ async def transfer_spl_token(
     receiver_pubkey = Pubkey.from_string(receiver_address)
     mint_pubkey = Pubkey.from_string(mint_address)
 
-    client = SolanaClient(endpoint)
     spl_client = Token(
         conn=client,
         pubkey=mint_pubkey,
@@ -418,47 +418,46 @@ async def transfer_spl_token(
         if len(dest_token_accounts.value) > 0:
             print("token account already exists, continue to transfer...")
             dest_token_account = dest_token_accounts.value[0].pubkey
+            print("dest_token_account_address", dest_token_accounts.value[0].pubkey)
         else:
             print("token account doesn't exist, creating...")
-            # recent_blockhash = client.get_latest_blockhash().value.blockhash
-            # dest_token_account = spl_client.create_associated_token_account(
-            #     owner=receiver_pubkey,
-            #     skip_confirmation=True,
-            #     recent_blockhash=recent_blockhash,
-            # )
+            recent_blockhash = client.get_latest_blockhash().value.blockhash
+            # Create the token account
+            dest_token_account = spl_client.create_associated_token_account(
+                owner=receiver_pubkey,
+                skip_confirmation=False,
+                recent_blockhash=recent_blockhash,
+            )
             # print("dest_token", dest_token_account)
+
             max_retries = 5
             delay = 5
+            account_checked = False
             for attempt in range(max_retries):
                 try:
-                    recent_blockhash = client.get_latest_blockhash().value.blockhash
-                    # Create the token account
-                    dest_token_account = spl_client.create_associated_token_account(
-                        owner=receiver_pubkey,
-                        skip_confirmation=False,
-                        recent_blockhash=recent_blockhash,
-                    )
                     # Verify the account has been created
                     dest_token_accounts = spl_client.get_accounts_by_owner(
                         owner=receiver_pubkey, commitment=None, encoding="base64"
                     )
                     if len(dest_token_accounts.value) > 0:
                         print("token account created.")
+                        account_checked = True
                         dest_token_account = dest_token_accounts.value[0].pubkey
                         break
                     else:
-                        print(f"Attempt {attempt+1}: Failed to create token account.")
+                        print(f"Attempt {attempt+1}: Account check failed.")
                         time.sleep(delay)  # Wait before the next retry
                         continue
 
                 except Exception as e:
-                    print(
-                        f"Attempt {attempt+1}: Failed to create token account with error : {e}"
-                    )
+                    print(f"Attempt {attempt+1}: Account check failed with error : {e}")
                     time.sleep(delay)  # Wait before the next retry
+            if account_checked == False:
+                return "error"
 
     except Exception as e:
         print(f"Failed to ensure receiver token account: {e}")
+        return "error"
 
     mint_info = spl_client.get_mint_info()
     decimals = mint_info.decimals
@@ -479,26 +478,23 @@ async def transfer_spl_token(
             owner=sender_keypair,
             amount=adjusted_amount,
             multi_signers=None,
-            opts=TxOpts(skip_preflight=True, preflight_commitment="confirmed"),
+            opts=TxOpts(skip_preflight=True, preflight_commitment="finalized"),
             recent_blockhash=recent_blockhash,
         )
 
-        return transaction
+        # return transaction
+        confirmation = client.confirm_transaction(
+            transaction.value, commitment="finalized"
+        )
 
-        # confirmation = client.confirm_transaction(
-        #     transaction.value, commitment="finalized"
-        # )
-
-        # if confirmation["result"]["value"]:
-        #     if confirmation["result"]["value"]["err"] is None:
-        #         return transaction
-        #     else:
-        #         print(
-        #             f"Transaction failed with error: {confirmation['result']['value']['err']}"
-        #         )
-        #         return "error"
-        # else:
-        #     return "error"
+        if confirmation.value:
+            if confirmation.value[0].err is None:
+                return transaction
+            else:
+                print(f"Transaction failed with error: {confirmation.value[0].err}")
+                return "error"
+        else:
+            return "error"
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         return "error"
